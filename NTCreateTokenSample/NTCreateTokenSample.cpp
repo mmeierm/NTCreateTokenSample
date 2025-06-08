@@ -42,7 +42,7 @@ HANDLE FindUserToken(PSID pTargetSid) {
 
     if (Process32First(hSnap, &pe)) {
         do {
-			// explorer.exe is the shell process for the user, we will use it to get the token
+            // explorer.exe is the shell process for the user, we will use it to get the token
             char exeFile[MAX_PATH];
             wcstombs_s(nullptr, exeFile, MAX_PATH, pe.szExeFile, _TRUNCATE);
 
@@ -214,11 +214,30 @@ int main(int argc, char* argv[])
     }
     CloseHandle(hSelfToken);
 
+    for (DWORD i = 0; i < pPrivs->PrivilegeCount; ) {
+        char name[128] = { 0 };
+        DWORD nameLen = sizeof(name);
+        if (LookupPrivilegeNameA(NULL, &pPrivs->Privileges[i].Luid, name, &nameLen)) {
+            if (_stricmp(name, "SeCreateTokenPrivilege") == 0 ||
+                _stricmp(name, "SeAssignPrimaryTokenPrivilege") == 0 ||
+                _stricmp(name, "SeTcbPrivilege") == 0) {
+                // Entfernen: nachfolgende Privilegien nach vorne kopieren
+                for (DWORD j = i; j < pPrivs->PrivilegeCount - 1; ++j) {
+                    pPrivs->Privileges[j] = pPrivs->Privileges[j + 1];
+                }
+                --pPrivs->PrivilegeCount;
+                continue; 
+            }
+        }
+        ++i;
+    }
+
+
     // 5. Set Owner to User-SID 
     PTOKEN_OWNER pOwner = (PTOKEN_OWNER)LocalAlloc(LPTR, sizeof(TOKEN_OWNER));
     pOwner->Owner = pUser->User.Sid;
 
-	// 6. Set Token Integrity Level to High (S-1-16-12288) und if exists, remove S-1-16-8192 (Medium IL)
+    // 6. Set Token Integrity Level to High (S-1-16-12288) und if exists, remove S-1-16-8192 (Medium IL)
     PSID pHighIL = NULL;
     if (!ConvertStringSidToSidA("S-1-16-12288", &pHighIL)) {
         printf("ConvertStringSidToSidA (High IL) failed: %lu\n", GetLastError());
@@ -229,7 +248,7 @@ int main(int argc, char* argv[])
     tml.Label.Attributes = SE_GROUP_INTEGRITY;
     tml.Label.Sid = pHighIL;
 
-	// Replace S-1-16-8192 with S-1-16-12288 in the groups array
+    // Replace S-1-16-8192 with S-1-16-12288 in the groups array
     std::vector<PSID> highIlCopies;
     for (DWORD i = 0; i < pGroups->GroupCount; ++i) {
         char* sidStr = NULL;
@@ -237,7 +256,7 @@ int main(int argc, char* argv[])
             if (_stricmp(sidStr, "S-1-16-8192") == 0) {
                 PSID pHighILCopy = LocalAlloc(LPTR, GetLengthSid(pHighIL));
                 if (CopySid(GetLengthSid(pHighIL), pHighILCopy, pHighIL)) {
-					// The original SID is still used in the token.
+                    // The original SID is still used in the token.
                     pGroups->Groups[i].Sid = pHighILCopy;
                     highIlCopies.push_back(pHighILCopy);
                 }
@@ -282,7 +301,7 @@ int main(int argc, char* argv[])
     strcpy_s(source.SourceName, sizeof(source.SourceName), "S4UWin");
     AllocateLocallyUniqueId(&source.SourceIdentifier);
 
-	// 10. Empty Objekt-Attbutes-Struktur
+    // 10. Empty Objekt-Attbutes-Struktur
     OBJECT_ATTRIBUTES objAttr = { 0 };
     objAttr.Length = sizeof(OBJECT_ATTRIBUTES);
 
@@ -315,7 +334,7 @@ int main(int argc, char* argv[])
         tp.PrivilegeCount = privCount;
         if (privCount > 0) {
             AdjustTokenPrivileges(hProcToken, FALSE, &tp, sizeof(tp), NULL, NULL);
-			// ignore error, as AdjustTokenPrivileges can give GetLastError() != 0 even if it succeeds
+            // ignore error, as AdjustTokenPrivileges can give GetLastError() != 0 even if it succeeds
         }
         CloseHandle(hProcToken);
     }
@@ -332,14 +351,14 @@ int main(int argc, char* argv[])
         pUser,
         pGroups,
         pPrivs,
-        pOwner,           
-        pPrimaryGroup,   
-        pDefaultDacl,     
+        pOwner,
+        pPrimaryGroup,
+        pDefaultDacl,
         &source
     );
 
     if (status == 0) {
-		// Get Session-ID of initial process (User-Token)
+        // Get Session-ID of initial process (User-Token)
         DWORD userSessionId = 0;
         DWORD sessionIdLen = sizeof(DWORD);
         if (!GetTokenInformation(hUserToken, TokenSessionId, &userSessionId, sizeof(userSessionId), &sessionIdLen)) {
@@ -378,14 +397,14 @@ int main(int argc, char* argv[])
 
     printf("Token created sucessfully\n");
 
-	// Create Environment Block for the new Token
+    // Create Environment Block for the new Token
     LPVOID env = NULL;
     if (!CreateEnvironmentBlock(&env, hToken, FALSE)) {
         printf("CreateEnvironmentBlock failed: %lu\n", GetLastError());
         env = NULL;
     }
 
-	// Start a new process with the created token
+    // Start a new process with the created token
     STARTUPINFO si = { sizeof(si) };
     PROCESS_INFORMATION pi = { 0 };
     WCHAR cmdLine[512] = L"cmd.exe";
@@ -410,7 +429,7 @@ int main(int argc, char* argv[])
     CloseHandle(hToken);
     CloseHandle(hUserToken);
 
-	// Cleanup: Only free allocated memory, handles are closed
+    // Cleanup: Only free allocated memory, handles are closed
     for (PSID sid : highIlCopies) LocalFree(sid);
     LocalFree(pHighIL);
     LocalFree(pUserSid);
